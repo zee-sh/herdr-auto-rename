@@ -1,6 +1,6 @@
 id = "zee-sh.auto-rename"
 name = "auto-rename"
-version = "0.2.0"
+version = "0.1.0"
 min_herdr_version = "0.9.0"
 platforms = ["macos", "linux"]
 description = "Name tabs and pane borders after each coding agent's session name, live, and nothing else."
