@@ -100,11 +100,13 @@ func sweep(seq string) error {
 		return err
 	}
 	var errs []error
+	prev := map[string]string{}
 	for _, a := range agents {
+		prev[a.PaneID] = paneLabel(a.PaneID)
 		errs = append(errs, labelPane(a, seq))
 	}
 	for _, t := range tabs {
-		errs = append(errs, labelTab(t, agents))
+		errs = append(errs, labelTab(t, agents, prev))
 	}
 	return errors.Join(errs...)
 }
@@ -115,7 +117,7 @@ func handlePane(paneID, seq string) error {
 	if err != nil {
 		return err
 	}
-	tabID := ""
+	tabID, prev := "", paneLabel(paneID)
 	if a != nil {
 		if err := labelPane(a, seq); err != nil {
 			return err
@@ -124,7 +126,7 @@ func handlePane(paneID, seq string) error {
 	} else if tabID, err = paneTab(paneID); err != nil || tabID == "" {
 		return err
 	}
-	return refreshTab(tabID)
+	return refreshTab(tabID, map[string]string{paneID: prev})
 }
 
 // debugLog appends the raw event to $HERDR_PLUGIN_CONFIG_DIR/events.log when

@@ -14,8 +14,9 @@ after:    Luvus documentation   2   herdr-plugin-rename
 - **The session name, as written**, including Claude Code's `/rename`.
 - **Live**: a watcher listens to herdr's socket events, so renames show up immediately.
 - **Agent tabs only**: tabs without an agent keep herdr's numbers.
-- **Respects your names**: a tab is only renamed while it shows herdr's default number or a name
-  this plugin set. Rename a tab yourself and it is left alone.
+- **Respects your names**: a tab is only renamed while it shows herdr's default number, a name
+  this plugin set, or its agent's session name. Name a tab after its session and it follows
+  `/rename`; give it any other name and it is left alone.
 - **Pane labels, not pane renames**: pane labels are herdr display metadata scoped to the agent.
   They never override a pane name you set and disappear when the agent exits.
 - **One watcher per herdr session**, with separate state for each named session.

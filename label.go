@@ -44,6 +44,12 @@ func truncate(s string, n int) string {
 	return s
 }
 
+// paneLabel returns the label this plugin last set on paneID, or "".
+func paneLabel(paneID string) string {
+	b, _ := os.ReadFile(stateFile("pane-" + paneID))
+	return string(b)
+}
+
 // labelPane sets or clears this plugin's display_agent entry for a's pane.
 // The entry is scoped to the agent, so herdr drops it when the agent exits.
 func labelPane(a *agent, seq string) error {
@@ -72,8 +78,9 @@ func labelPane(a *agent, seq string) error {
 	return os.WriteFile(state, []byte(title), 0o644)
 }
 
-// refreshTab relabels one tab against the current agent list.
-func refreshTab(tabID string) error {
+// refreshTab relabels one tab against the current agent list. prev maps pane
+// ids to the session names they showed before this update.
+func refreshTab(tabID string, prev map[string]string) error {
 	t, err := getTab(tabID)
 	if err != nil || t == nil {
 		return err
@@ -88,7 +95,7 @@ func refreshTab(tabID string) error {
 	}
 	for _, o := range tabs {
 		if o.TabID == tabID {
-			return labelTab(o, agents)
+			return labelTab(o, agents, prev)
 		}
 	}
 	return nil
@@ -98,20 +105,23 @@ func refreshTab(tabID string) error {
 // and otherwise shows its position number.
 //
 // A tab is only touched while it carries herdr's own default label (its
-// position) or the label this plugin last set, so a name the user typed always
-// wins. herdr can't hand a renamed tab back to automatic numbering, so once
+// position), the label this plugin last set, or its agent's session name
+// (current or, via prev, the one before a rename): a tab the user named after
+// the session follows the session. Any other name the user typed always wins. herdr can't hand a renamed tab back to automatic numbering, so once
 // the session label goes the plugin keeps owning the number it writes and
 // keeps it in step with the tab's position.
-func labelTab(t *tab, agents []*agent) error {
+func labelTab(t *tab, agents []*agent, prev map[string]string) error {
 	var in []*agent
 	for _, a := range agents {
 		if a.TabID == t.TabID {
 			in = append(in, a)
 		}
 	}
-	want := ""
+	want, adopt := "", false
 	if len(in) == 1 {
 		want = truncate(sessionTitle(in[0]), maxTabRunes)
+		old := truncate(prev[in[0].PaneID], maxTabRunes)
+		adopt = want != "" && (t.Label == want || (old != "" && t.Label == old))
 	}
 
 	pos := strconv.Itoa(t.Pos)
@@ -121,7 +131,7 @@ func labelTab(t *tab, agents []*agent) error {
 		set = string(b)
 	}
 	ours := set != "" && t.Label == set
-	if !ours && t.Label != pos {
+	if !ours && !adopt && t.Label != pos {
 		return nil
 	}
 	if want == "" {
