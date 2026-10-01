@@ -11,8 +11,8 @@
 //     herdr's default number (or one this plugin set). Custom tab names are
 //     never touched.
 //
-// Run from an event hook it updates the event's pane and tab; run from the
-// startup hook or the refresh action it sweeps every agent and tab.
+// A background watcher (see watch.go) reacts to title changes as they happen;
+// the startup hook and refresh action sweep everything and start the watcher.
 package main
 
 import (
@@ -51,38 +51,43 @@ type agent struct {
 }
 
 func main() {
-	if err := run(); err != nil {
+	var err error
+	if len(os.Args) > 1 {
+		if os.Args[1] != "watch" {
+			fmt.Fprintf(os.Stderr, "usage: %s [watch]\n", os.Args[0])
+			os.Exit(2)
+		}
+		err = watch()
+	} else {
+		err = hook()
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "herdr-pane-title:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	// Captured before any read so a slower concurrent run can't overwrite a
-	// newer label: herdr drops reports with an older seq from the same source.
-	seq := strconv.FormatInt(time.Now().UnixNano(), 10)
-
+// hook runs as a herdr startup hook, event hook or action. The watcher does
+// the real work; hooks make sure it is running, and cover for it if it can't
+// start.
+func hook() error {
 	event := os.Getenv("HERDR_PLUGIN_EVENT_JSON")
 	debugLog(event)
 
+	running := watcherRunning()
+	if !running {
+		if err := startWatcher(); err != nil {
+			fmt.Fprintln(os.Stderr, "herdr-pane-title: start watcher:", err)
+		} else if event == "" {
+			return nil // a new watcher sweeps as soon as it subscribes
+		}
+	}
 	if event == "" {
 		// Startup hook or refresh action.
-		agents, err := listAgents()
-		if err != nil {
-			return err
-		}
-		tabs, err := listTabs()
-		if err != nil {
-			return err
-		}
-		var errs []error
-		for _, a := range agents {
-			errs = append(errs, label(a, seq))
-		}
-		for _, t := range tabs {
-			errs = append(errs, labelTab(t, agents))
-		}
-		return errors.Join(errs...)
+		return sweep(newSeq())
+	}
+	if running {
+		return nil
 	}
 
 	var ev struct {
@@ -96,7 +101,39 @@ func run() error {
 	if ev.Data.PaneID == "" {
 		return nil
 	}
-	a, err := getAgent(ev.Data.PaneID)
+	return handlePane(ev.Data.PaneID, newSeq())
+}
+
+// newSeq returns a report sequence number. Take it before reading state so a
+// slower concurrent run can't overwrite a newer label: herdr drops reports
+// with an older seq from the same source.
+func newSeq() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
+}
+
+// sweep labels every live agent pane and every tab.
+func sweep(seq string) error {
+	agents, err := listAgents()
+	if err != nil {
+		return err
+	}
+	tabs, err := listTabs()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, a := range agents {
+		errs = append(errs, label(a, seq))
+	}
+	for _, t := range tabs {
+		errs = append(errs, labelTab(t, agents))
+	}
+	return errors.Join(errs...)
+}
+
+// handlePane labels paneID and its tab.
+func handlePane(paneID, seq string) error {
+	a, err := getAgent(paneID)
 	if err != nil {
 		return err
 	}
@@ -106,7 +143,7 @@ func run() error {
 			return err
 		}
 		tabID = a.TabID
-	} else if tabID, err = paneTab(ev.Data.PaneID); err != nil || tabID == "" {
+	} else if tabID, err = paneTab(paneID); err != nil || tabID == "" {
 		return err
 	}
 	return refreshTab(tabID)
