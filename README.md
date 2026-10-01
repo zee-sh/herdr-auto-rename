@@ -82,3 +82,7 @@ tail -f "$(herdr plugin config-dir zee-sh.auto-rename)/events.log"
 ```
 
 The watcher logs to `watch.log` in the plugin's state dir, under `session-<hash>/`.
+
+## License
+
+[MIT](LICENSE)
