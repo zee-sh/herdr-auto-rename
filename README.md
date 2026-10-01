@@ -5,8 +5,8 @@ A [herdr](https://herdr.dev) plugin that names tabs and pane borders after each 
 `/rename`), and does nothing else.
 
 ```
-before:   1   2   3
-after:    Luvus documentation   2   herdr-plugin-rename
+before:   1        2   3
+after:    fix-auth 2   api-docs
 ```
 
 ## Features
