@@ -1,26 +1,34 @@
 # herdr-pane-title
 
-A [herdr](https://github.com/ogulcancelik/herdr) plugin that labels each agent pane's border with the
-agent's **session name** (e.g. the Claude Code session title) instead of just `claude`.
+A [herdr](https://github.com/ogulcancelik/herdr) plugin that names tabs and pane borders after the
+coding agent's **session name** (e.g. the Claude Code session title) instead of `1 2 3` / `claude`.
 
 ## How it works
 
 Agents like Claude Code write their session name into the terminal title, which herdr exposes as
-`terminal_title_stripped`. The plugin copies that title into the pane's `display_agent` metadata
-via `herdr pane report-metadata`:
+`terminal_title_stripped`. The plugin copies that title into:
+
+- the **tab label**, for tabs holding exactly one agent (truncated to 24 characters);
+- the pane's `display_agent` metadata (`herdr pane report-metadata`), which herdr draws on split
+  pane borders.
+
+It runs:
 
 - on `pane.agent_status_changed` (every agent turn) for that pane;
 - from a `[[startup]]` hook and the `refresh` action, for every live agent.
 
-- Non-destructive: a manual pane name (`prefix+shift+p`) still wins, and the label is scoped to the
-  agent so it clears when the agent exits.
+- Tabs are only renamed while their label is herdr's default number or the name the plugin set,
+  so a tab you rename yourself (`prefix+shift+t`) is never touched. When the agent exits or the tab
+  gains a second agent, the tab gets its position number back.
+- Pane labels never override a manual pane name (`prefix+shift+p`), and are scoped to the agent
+  so herdr clears them when it exits.
 - Generic titles (`claude`, `Claude Code`, the agent's own name) are not shown; if the title
-  falls back to one of them, the plugin clears the label it set. Long titles are truncated to
+  falls back to one of them, the plugin clears the label it set. Pane labels are truncated to
   40 characters.
 - A session rename shows up on the agent's next turn (herdr has no title-change event).
 - After `plugin link`/`enable`, run the `refresh` action once to label agents that are already
   idle; startup hooks only run when the server starts.
-- herdr only draws agent labels on split pane borders, so a lone pane shows nothing.
+- herdr only draws pane labels on split pane borders; a lone pane relies on the tab label.
 
 ## Requirements
 

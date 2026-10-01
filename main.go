@@ -3,11 +3,16 @@
 //
 // Agents such as Claude Code put their session name in the terminal title,
 // which herdr exposes as terminal_title_stripped. This binary copies that title
-// into the pane's display_agent metadata, which herdr draws on the pane border
-// (ui.show_agent_labels_on_pane_borders = true) when no manual pane name is set.
+// into:
+//   - the pane's display_agent metadata, which herdr draws on split pane
+//     borders (ui.show_agent_labels_on_pane_borders = true) when no manual
+//     pane name is set;
+//   - the tab label, for tabs holding exactly one agent whose label is still
+//     herdr's default number (or one this plugin set). Custom tab names are
+//     never touched.
 //
-// Run from an event hook it updates the event's pane; run from the startup hook
-// or the refresh action it sweeps every live agent.
+// Run from an event hook it updates the event's pane and tab; run from the
+// startup hook or the refresh action it sweeps every agent and tab.
 package main
 
 import (
@@ -24,8 +29,9 @@ import (
 )
 
 const (
-	source   = "zee-sh.pane-title"
-	maxRunes = 40
+	source      = "zee-sh.pane-title"
+	maxPaneRune = 40
+	maxTabRune  = 24
 )
 
 // Titles that are an agent's default rather than a session name.
@@ -38,6 +44,7 @@ var genericTitles = map[string]bool{
 
 type agent struct {
 	PaneID        string `json:"pane_id"`
+	TabID         string `json:"tab_id"`
 	Agent         string `json:"agent"`
 	DisplayAgent  string `json:"display_agent"`
 	TerminalTitle string `json:"terminal_title_stripped"`
@@ -64,9 +71,16 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		tabs, err := listTabs()
+		if err != nil {
+			return err
+		}
 		var errs []error
 		for _, a := range agents {
 			errs = append(errs, label(a, seq))
+		}
+		for _, t := range tabs {
+			errs = append(errs, labelTab(t, agents))
 		}
 		return errors.Join(errs...)
 	}
@@ -83,16 +97,25 @@ func run() error {
 		return nil
 	}
 	a, err := getAgent(ev.Data.PaneID)
-	if err != nil || a == nil {
+	if err != nil {
 		return err
 	}
-	return label(a, seq)
+	tabID := ""
+	if a != nil {
+		if err := label(a, seq); err != nil {
+			return err
+		}
+		tabID = a.TabID
+	} else if tabID, err = paneTab(ev.Data.PaneID); err != nil || tabID == "" {
+		return err
+	}
+	return refreshTab(tabID)
 }
 
 // label sets or clears this plugin's display_agent entry for a's pane.
 func label(a *agent, seq string) error {
 	state := stateFile(a.PaneID)
-	title := sessionTitle(a)
+	title := truncate(sessionTitle(a), maxPaneRune)
 
 	if title == "" {
 		// Only clear a label this plugin set, so a clear (which itself fires
@@ -126,10 +149,158 @@ func sessionTitle(a *agent) string {
 	if t == "" || strings.EqualFold(t, a.Agent) || genericTitles[strings.ToLower(t)] {
 		return ""
 	}
-	if r := []rune(t); len(r) > maxRunes {
-		t = string(r[:maxRunes-1]) + "…"
-	}
 	return t
+}
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
+}
+
+type tab struct {
+	TabID       string `json:"tab_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Label       string `json:"label"`
+}
+
+// refreshTab relabels one tab against the current agent list.
+func refreshTab(tabID string) error {
+	t, err := getTab(tabID)
+	if err != nil || t == nil {
+		return err
+	}
+	agents, err := listAgents()
+	if err != nil {
+		return err
+	}
+	return labelTab(t, agents)
+}
+
+// labelTab names t after its agent's session when it holds exactly one agent,
+// and gives the tab back its position number once that no longer holds. A tab
+// is only touched while its label is a default number or the name this plugin
+// last set, so a name the user typed always wins.
+func labelTab(t *tab, agents []*agent) error {
+	var in []*agent
+	for _, a := range agents {
+		if a.TabID == t.TabID {
+			in = append(in, a)
+		}
+	}
+	want := ""
+	if len(in) == 1 {
+		want = truncate(sessionTitle(in[0]), maxTabRune)
+	}
+
+	state := stateFile("tab-" + t.TabID)
+	set := ""
+	if b, err := os.ReadFile(state); err == nil {
+		set = string(b)
+	}
+	ours := set != "" && t.Label == set
+	if !ours && !isDefaultLabel(t.Label) {
+		return nil
+	}
+
+	if want == "" {
+		if !ours {
+			return nil
+		}
+		n, err := tabPosition(t)
+		if err != nil {
+			return err
+		}
+		want = strconv.Itoa(n)
+		_ = os.Remove(state)
+	} else if state != "" {
+		_ = os.WriteFile(state, []byte(want), 0o644)
+	}
+	if t.Label == want {
+		return nil
+	}
+	_, err := herdr("tab", "rename", t.TabID, want)
+	return err
+}
+
+// isDefaultLabel reports whether label looks like herdr's generated tab
+// label, a per-workspace position number.
+func isDefaultLabel(label string) bool {
+	n, err := strconv.Atoi(label)
+	return err == nil && n > 0
+}
+
+// tabPosition returns t's 1-based position in its workspace, which is the
+// label herdr generates for it.
+func tabPosition(t *tab) (int, error) {
+	tabs, err := listTabs("--workspace", t.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	for i, o := range tabs {
+		if o.TabID == t.TabID {
+			return i + 1, nil
+		}
+	}
+	return 0, fmt.Errorf("tab %s not in workspace %s", t.TabID, t.WorkspaceID)
+}
+
+func listTabs(args ...string) ([]*tab, error) {
+	out, err := herdr(append([]string{"tab", "list"}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Result struct {
+			Tabs []*tab `json:"tabs"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("decode tab list: %w", err)
+	}
+	return resp.Result.Tabs, nil
+}
+
+func getTab(tabID string) (*tab, error) {
+	out, err := herdr("tab", "get", tabID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not_found") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var resp struct {
+		Result struct {
+			Tab *tab `json:"tab"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("decode tab get: %w", err)
+	}
+	return resp.Result.Tab, nil
+}
+
+// paneTab returns the tab holding paneID, or "" when the pane is gone.
+func paneTab(paneID string) (string, error) {
+	out, err := herdr("pane", "get", paneID)
+	if err != nil {
+		if strings.Contains(err.Error(), "pane_not_found") {
+			return "", nil
+		}
+		return "", err
+	}
+	var resp struct {
+		Result struct {
+			Pane struct {
+				TabID string `json:"tab_id"`
+			} `json:"pane"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return "", fmt.Errorf("decode pane get: %w", err)
+	}
+	return resp.Result.Pane.TabID, nil
 }
 
 func getAgent(paneID string) (*agent, error) {
@@ -183,15 +354,15 @@ func herdr(args ...string) ([]byte, error) {
 	return out, nil
 }
 
-// stateFile is where the label last reported for paneID is remembered, or ""
-// when herdr provided no state dir.
-func stateFile(paneID string) string {
+// stateFile is where the label last set for id (a pane, or "tab-<tab id>")
+// is remembered, or "" when herdr provided no state dir.
+func stateFile(id string) string {
 	dir := os.Getenv("HERDR_PLUGIN_STATE_DIR")
 	if dir == "" {
 		return ""
 	}
 	_ = os.MkdirAll(dir, 0o755)
-	return filepath.Join(dir, "label-"+strings.ReplaceAll(paneID, ":", "_"))
+	return filepath.Join(dir, "label-"+strings.ReplaceAll(id, ":", "_"))
 }
 
 func exists(path string) bool {
