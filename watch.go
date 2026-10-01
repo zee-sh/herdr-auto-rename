@@ -12,7 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 )
 
 // herdr only passes a fixed set of events to plugin hooks, and pane.updated
@@ -27,6 +30,9 @@ var subscriptions = []string{
 	"pane.closed",
 	"pane.moved",
 	"pane.exited",
+	"tab.created", // tab events shift positions, and so the numbers we own
+	"tab.closed",
+	"tab.moved",
 }
 
 var errEventsLost = errors.New("events lost")
@@ -38,7 +44,7 @@ func watch() error {
 	}
 	defer lock.Close()
 
-	logf, err := os.OpenFile(filepath.Join(stateDir(), "watch.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	logf, err := os.OpenFile(filepath.Join(sessionDir(), "watch.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err == nil {
 		log.SetOutput(logf)
 		defer logf.Close()
@@ -121,8 +127,8 @@ func subscribe() error {
 			logErr(handlePane(msg.Data.Pane.PaneID, newSeq()))
 		case "pane_agent_detected":
 			logErr(handlePane(msg.Data.PaneID, newSeq()))
-		case "pane_closed", "pane_moved", "pane_exited":
-			// The pane (or its id) is gone, so recheck every tab.
+		case "pane_closed", "pane_moved", "pane_exited", "tab_created", "tab_closed", "tab_moved":
+			// A pane id or tab position changed, so recheck everything.
 			logErr(sweep(newSeq()))
 		}
 	}
@@ -180,10 +186,43 @@ func lockWatcher() (*os.File, error) {
 	return f, nil
 }
 
-// lockPath is per socket, so each named herdr session gets its own watcher.
+// restartWatcher replaces the running watcher, e.g. after an upgrade, so the
+// new binary takes over without restarting the herdr server.
+func restartWatcher() error {
+	if b, err := os.ReadFile(lockPath()); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && watcherRunning() {
+			if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+				return fmt.Errorf("stop watcher %d: %w", pid, err)
+			}
+			for deadline := time.Now().Add(5 * time.Second); watcherRunning(); {
+				if time.Now().After(deadline) {
+					return fmt.Errorf("watcher %d still running", pid)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}
+	return startWatcher()
+}
+
 func lockPath() string {
+	return filepath.Join(sessionDir(), "watch.lock")
+}
+
+// sessionDir holds the state of one herdr server. herdr gives a plugin the
+// same state dir in every named session, and tab/pane ids repeat between
+// sessions, so state is keyed by the server's socket.
+func sessionDir() string {
 	sum := sha256.Sum256([]byte(os.Getenv("HERDR_SOCKET_PATH")))
-	return filepath.Join(stateDir(), "watch-"+hex.EncodeToString(sum[:6])+".lock")
+	dir := filepath.Join(stateDir(), "session-"+hex.EncodeToString(sum[:6]))
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+// stateFile is where the label last set for id ("pane-<id>" or "tab-<id>")
+// is remembered.
+func stateFile(id string) string {
+	return filepath.Join(sessionDir(), "label-"+strings.ReplaceAll(id, ":", "_"))
 }
 
 func stateDir() string {

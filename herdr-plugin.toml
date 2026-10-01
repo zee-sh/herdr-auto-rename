@@ -1,28 +1,33 @@
-id = "zee-sh.pane-title"
-name = "pane-title"
-version = "0.1.0"
+id = "zee-sh.auto-rename"
+name = "auto-rename"
+version = "0.2.0"
 min_herdr_version = "0.9.0"
 platforms = ["macos", "linux"]
-description = "Label each agent pane's border with the agent's session name."
+description = "Name tabs and pane borders after each coding agent's session name, live, and nothing else."
 
 # Skipped by `herdr plugin link`; run `make build` for a local checkout.
 # herdr runs builds with a minimal PATH, so add the usual Go install locations.
 [[build]]
-command = ["sh", "-c", "PATH=\"$PATH:/opt/homebrew/bin:/usr/local/go/bin:/etc/profiles/per-user/$USER/bin:/run/current-system/sw/bin:$HOME/.nix-profile/bin\" go build -o bin/herdr-pane-title ."]
+command = ["sh", "-c", "PATH=\"$PATH:/opt/homebrew/bin:/usr/local/go/bin:/etc/profiles/per-user/$USER/bin:/run/current-system/sw/bin:$HOME/.nix-profile/bin\" go build -o bin/herdr-auto-rename ."]
 
-# Label every live agent and start the watcher (watch.go) that follows title
-# changes. Not run on `plugin link`/`enable`; use the refresh action then.
+# Label everything and start the watcher (watch.go) that follows title changes.
+# Not run on `plugin install`/`link`/`enable`; use the restart action then.
 [[startup]]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-pane-title\""]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-auto-rename\""]
 
 # Fallback: restarts the watcher if it died, and labels the pane while it's down.
 [[events]]
 on = "pane.agent_status_changed"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-pane-title\""]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-auto-rename\""]
 
-# Re-label everything and make sure the watcher runs (bind via [[keys.command]] type = "plugin_action").
 [[actions]]
 id = "refresh"
-title = "pane-title: refresh all agent panes"
-contexts = ["pane"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-pane-title\""]
+title = "auto-rename: refresh all tabs and panes"
+contexts = ["pane", "workspace"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-auto-rename\""]
+
+[[actions]]
+id = "restart"
+title = "auto-rename: restart watcher (after install or upgrade)"
+contexts = ["pane", "workspace"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-auto-rename\" restart"]

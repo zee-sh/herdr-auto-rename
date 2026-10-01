@@ -1,39 +1,47 @@
-# herdr-pane-title
+# herdr-auto-rename
 
-A [herdr](https://github.com/ogulcancelik/herdr) plugin that names tabs and pane borders after the
-coding agent's **session name** (e.g. the Claude Code session title) instead of `1 2 3` / `claude`.
+A [herdr](https://herdr.dev) plugin that names tabs and pane borders after each coding agent's
+**session name**, exactly as the agent sets it (for Claude Code: the session title, including
+`/rename`), and does nothing else.
+
+```
+before:   1   2   3
+after:    Luvus documentation   2   herdr-plugin-rename
+```
+
+## Why this one
+
+- **The session name, as written.** No directory, branch or `claude ›` prefixes, no rewriting.
+- **Live and idle-free.** A watcher listens to herdr's socket events, so a `/rename` shows up
+  immediately, and nothing runs between events. No polling.
+- **Only agent tabs.** Shells, editors and other tabs keep herdr's numbers.
+- **Never clobbers your names.** A tab is only renamed while it shows herdr's default number or
+  a name this plugin set. Rename a tab yourself and it is yours; there is nothing to guess and
+  nothing renamed on first start.
+- **Panes are labelled, not renamed.** Pane labels are herdr display metadata scoped to the
+  agent: they never override a pane name you set and vanish when the agent exits.
 
 ## How it works
 
-Agents like Claude Code write their session name into the terminal title, which herdr exposes as
-`terminal_title_stripped`. The plugin copies that title into:
+Agents write their session name into the terminal title, which herdr exposes as
+`terminal_title_stripped`. Titles that are not session names (`claude`, `Claude Code`, a shell
+prompt like `user@host:~/dir`, a bare path) are ignored.
 
-- the **tab label**, for tabs holding exactly one agent (truncated to 24 characters);
-- the pane's `display_agent` metadata (`herdr pane report-metadata`), which herdr draws on split
-  pane borders.
+- **Tabs** holding exactly one agent are renamed to its session name (24 characters max). When
+  the agent leaves or a second agent joins, the tab shows its position number again. herdr can't
+  return a renamed tab to automatic numbering, so the plugin keeps that number in step as tabs
+  are opened, closed and moved.
+- **Panes** get the session name as `display_agent` metadata (40 characters max), which herdr
+  shows on split pane borders and in the agent sidebar.
 
-It runs as a small background watcher, started by a `[[startup]]` hook (or the `refresh` action),
-that subscribes to herdr's socket events. `pane.updated` fires the moment a terminal title changes,
-so a Claude Code `/rename` shows up immediately. herdr doesn't offer that event to plugin hooks,
-hence the watcher. It exits with the herdr server; one runs per herdr session.
-
-- Tabs are only renamed while their label is herdr's default number or the name the plugin set,
-  so a tab you rename yourself (`prefix+shift+t`) is never touched. When the agent exits or the tab
-  gains a second agent, the tab gets its position number back.
-- Pane labels never override a manual pane name (`prefix+shift+p`), and are scoped to the agent
-  so herdr clears them when it exits.
-- Generic titles (`claude`, `Claude Code`, the agent's own name) are not shown; if the title
-  falls back to one of them, the plugin clears the label it set. Pane labels are truncated to
-  40 characters.
-- After `plugin install`/`link`/`enable`, run the `refresh` action once
-  (`herdr plugin action invoke refresh --plugin zee-sh.pane-title`): startup hooks only run when
-  the server starts.
-- herdr only draws pane labels on split pane borders; a lone pane relies on the tab label.
+A `[[startup]]` hook starts one watcher per herdr session. It subscribes to `pane.updated` (which
+herdr does not offer to plugin hooks; it fires on title changes) plus pane and tab lifecycle
+events, and exits with the server. A `pane.agent_status_changed` hook restarts it if it ever dies.
 
 ## Requirements
 
-- herdr ≥ 0.9.0, Go to build.
-- In `config.toml`:
+- herdr ≥ 0.9.0, Go ≥ 1.22 to build, macOS or Linux.
+- For pane border labels:
 
   ```toml
   [ui]
@@ -43,25 +51,34 @@ hence the watcher. It exits with the herdr server; one runs per herdr session.
 ## Install
 
 ```sh
-herdr plugin install zee-sh/herdr-pane-title   # runs `go build` via [[build]]
-# or, from a checkout:
-make link      # build, (re)link and restart the watcher
-make restart   # after a rebuild
+herdr plugin install zee-sh/herdr-auto-rename        # builds with go
+herdr plugin action invoke restart --plugin zee-sh.auto-rename
 ```
 
-Optional keybinding for the `refresh` action:
+herdr only runs startup hooks when its server starts, so the second line starts the plugin now.
+Run it again after upgrading. Optional keybinding:
 
 ```toml
 [[keys.command]]
 key = "prefix+t"
 type = "plugin_action"
-command = "zee-sh.pane-title.refresh"
+command = "zee-sh.auto-rename.refresh"
 ```
 
-## Debugging
+## Development
 
 ```sh
-herdr plugin log list --plugin zee-sh.pane-title
-touch "$(herdr plugin config-dir zee-sh.pane-title)/debug"   # log raw events
-tail -f "$(herdr plugin config-dir zee-sh.pane-title)/events.log"
+make link      # build, (re)link and restart the watcher
+make restart   # after a rebuild
+go test ./...
 ```
+
+Debugging:
+
+```sh
+herdr plugin log list --plugin zee-sh.auto-rename
+touch "$(herdr plugin config-dir zee-sh.auto-rename)/debug"   # log hook event payloads
+tail -f "$(herdr plugin config-dir zee-sh.auto-rename)/events.log"
+```
+
+The watcher logs to `watch.log` in the plugin's state dir, under `session-<hash>/`.

@@ -1,18 +1,19 @@
-.PHONY: build link unlink restart
+.PHONY: build link restart unlink
+
+ID := zee-sh.auto-rename
 
 build:
-	go build -o bin/herdr-pane-title .
+	go build -o bin/herdr-auto-rename .
 
-# Relink after manifest changes; restart picks up a rebuilt binary.
+# (Re)link after manifest changes, then hand over to the new binary.
 link: build
-	-herdr plugin unlink zee-sh.pane-title >/dev/null 2>&1
-	herdr plugin link $(CURDIR)
+	-herdr plugin unlink $(ID) >/dev/null 2>&1
+	herdr plugin link $(CURDIR) >/dev/null
 	$(MAKE) restart
 
 restart: build
-	-pkill -f 'herdr-pane-title watch'
-	herdr plugin action invoke refresh --plugin zee-sh.pane-title >/dev/null
+	herdr plugin action invoke restart --plugin $(ID) >/dev/null
 
 unlink:
-	-pkill -f 'herdr-pane-title watch'
-	herdr plugin unlink zee-sh.pane-title
+	-pkill -f 'herdr-auto-rename watch'
+	herdr plugin unlink $(ID)
