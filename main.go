@@ -2,18 +2,23 @@
 // agent running in it.
 //
 // Agents such as Claude Code put their session name in the terminal title,
-// which herdr exposes as terminal_title_stripped. On every agent event this
-// binary copies that title into the pane's display_agent metadata, which herdr
-// draws on the pane border (ui.show_agent_labels_on_pane_borders = true) when
-// no manual pane name is set.
+// which herdr exposes as terminal_title_stripped. This binary copies that title
+// into the pane's display_agent metadata, which herdr draws on the pane border
+// (ui.show_agent_labels_on_pane_borders = true) when no manual pane name is set.
+//
+// Run from an event hook it updates the event's pane; run from the startup hook
+// or the refresh action it sweeps every live agent.
 package main
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -46,35 +51,72 @@ func main() {
 }
 
 func run() error {
+	// Captured before any read so a slower concurrent run can't overwrite a
+	// newer label: herdr drops reports with an older seq from the same source.
+	seq := strconv.FormatInt(time.Now().UnixNano(), 10)
+
 	event := os.Getenv("HERDR_PLUGIN_EVENT_JSON")
 	debugLog(event)
 
-	// Events carry the pane in their payload; actions only carry the focused pane.
-	paneID := os.Getenv("HERDR_PANE_ID")
-	if id := paneFrom(event, "pane_id"); id != "" {
-		paneID = id
-	} else if id := paneFrom(os.Getenv("HERDR_PLUGIN_CONTEXT_JSON"), "focused_pane_id"); id != "" {
-		paneID = id
-	}
-	if paneID == "" {
-		return nil
+	if event == "" {
+		// Startup hook or refresh action.
+		agents, err := listAgents()
+		if err != nil {
+			return err
+		}
+		var errs []error
+		for _, a := range agents {
+			errs = append(errs, label(a, seq))
+		}
+		return errors.Join(errs...)
 	}
 
-	a, err := getAgent(paneID)
+	var ev struct {
+		Data struct {
+			PaneID string `json:"pane_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(event), &ev); err != nil {
+		return fmt.Errorf("decode event: %w", err)
+	}
+	if ev.Data.PaneID == "" {
+		return nil
+	}
+	a, err := getAgent(ev.Data.PaneID)
 	if err != nil || a == nil {
-		// No agent in the pane (or it just exited): nothing to label.
-		return nil
+		return err
+	}
+	return label(a, seq)
+}
+
+// label sets or clears this plugin's display_agent entry for a's pane.
+func label(a *agent, seq string) error {
+	state := stateFile(a.PaneID)
+	title := sessionTitle(a)
+
+	if title == "" {
+		// Only clear a label this plugin set, so a clear (which itself fires
+		// an event) can't loop against a display_agent owned by another source.
+		if state == "" || !exists(state) {
+			return nil
+		}
+		_ = os.Remove(state)
+		_, err := herdr("pane", "report-metadata", a.PaneID,
+			"--source", source, "--agent", a.Agent, "--seq", seq, "--clear-display-agent")
+		return err
 	}
 
-	title := sessionTitle(a)
-	if title == "" || title == a.DisplayAgent {
+	if title == a.DisplayAgent {
 		return nil
 	}
-	_, err = herdr("pane", "report-metadata", paneID,
-		"--source", source,
-		"--agent", a.Agent,
-		"--display-agent", title)
-	return err
+	if _, err := herdr("pane", "report-metadata", a.PaneID,
+		"--source", source, "--agent", a.Agent, "--seq", seq, "--display-agent", title); err != nil {
+		return err
+	}
+	if state != "" {
+		_ = os.WriteFile(state, []byte(title), 0o644)
+	}
+	return nil
 }
 
 // sessionTitle returns the label to show for a, or "" when the terminal title
@@ -93,6 +135,10 @@ func sessionTitle(a *agent) string {
 func getAgent(paneID string) (*agent, error) {
 	out, err := herdr("agent", "get", paneID)
 	if err != nil {
+		// The pane has no agent (or is gone): nothing to label.
+		if strings.Contains(err.Error(), "agent_not_found") || strings.Contains(err.Error(), "pane_not_found") {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var resp struct {
@@ -106,6 +152,22 @@ func getAgent(paneID string) (*agent, error) {
 	return resp.Result.Agent, nil
 }
 
+func listAgents() ([]*agent, error) {
+	out, err := herdr("agent", "list")
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Result struct {
+			Agents []*agent `json:"agents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("decode agent list: %w", err)
+	}
+	return resp.Result.Agents, nil
+}
+
 func herdr(args ...string) ([]byte, error) {
 	bin := os.Getenv("HERDR_BIN_PATH")
 	if bin == "" {
@@ -116,54 +178,35 @@ func herdr(args ...string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("herdr %s: %w: %s", args[0]+" "+args[1], err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("herdr %s %s: %w: %s", args[0], args[1], err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
 }
 
-// paneFrom decodes raw JSON and returns the first string stored under key.
-func paneFrom(raw, key string) string {
-	var v any
-	if raw == "" || json.Unmarshal([]byte(raw), &v) != nil {
+// stateFile is where the label last reported for paneID is remembered, or ""
+// when herdr provided no state dir.
+func stateFile(paneID string) string {
+	dir := os.Getenv("HERDR_PLUGIN_STATE_DIR")
+	if dir == "" {
 		return ""
 	}
-	s, _ := findString(v, key)
-	return s
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "label-"+strings.ReplaceAll(paneID, ":", "_"))
 }
 
-// findString returns the first string value stored under key anywhere in v.
-func findString(v any, key string) (string, bool) {
-	switch v := v.(type) {
-	case map[string]any:
-		if s, ok := v[key].(string); ok && s != "" {
-			return s, true
-		}
-		for _, child := range v {
-			if s, ok := findString(child, key); ok {
-				return s, true
-			}
-		}
-	case []any:
-		for _, child := range v {
-			if s, ok := findString(child, key); ok {
-				return s, true
-			}
-		}
-	}
-	return "", false
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // debugLog appends the raw event to $HERDR_PLUGIN_CONFIG_DIR/events.log when
 // a file named "debug" exists there, for inspecting payload shapes.
 func debugLog(event string) {
 	dir := os.Getenv("HERDR_PLUGIN_CONFIG_DIR")
-	if dir == "" {
+	if dir == "" || !exists(filepath.Join(dir, "debug")) {
 		return
 	}
-	if _, err := os.Stat(dir + "/debug"); err != nil {
-		return
-	}
-	f, err := os.OpenFile(dir+"/events.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, "events.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}

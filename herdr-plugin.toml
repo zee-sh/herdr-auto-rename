@@ -10,17 +10,19 @@ description = "Label each agent pane's border with the agent's session name."
 [[build]]
 command = ["sh", "-c", "PATH=\"$PATH:/opt/homebrew/bin:/usr/local/go/bin:/etc/profiles/per-user/$USER/bin:/run/current-system/sw/bin:$HOME/.nix-profile/bin\" go build -o bin/herdr-pane-title ."]
 
-[[events]]
-on = "pane.agent_detected"
+# Label every live agent once the server is up (not run on `plugin link`/`enable`).
+[[startup]]
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-pane-title\""]
 
+# Fires on every agent turn. pane.agent_detected is skipped on purpose: at detection the
+# terminal title can still be the shell's or launcher's, and a status change follows anyway.
 [[events]]
 on = "pane.agent_status_changed"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-pane-title\""]
 
-# Manual refresh for the focused pane (bind via [[keys.command]] type = "plugin_action").
+# Manual re-sweep of every agent pane (bind via [[keys.command]] type = "plugin_action").
 [[actions]]
 id = "refresh"
-title = "pane-title: refresh focused pane"
+title = "pane-title: refresh all agent panes"
 contexts = ["pane"]
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-pane-title\""]
