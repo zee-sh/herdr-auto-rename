@@ -11,10 +11,10 @@ func TestSessionTitle(t *testing.T) {
 		"claude":                     "",
 		"Claude Code":                "",
 		"zsh":                        "",
-		"zeeshans@mbp:~/projects":    "",
-		"zeeshans@mbp ~/projects":    "",
+		"user@host:~/projects":       "",
+		"user@host ~/projects":       "",
 		"~/projects/personal":        "",
-		"/Users/zeeshans":            "",
+		"/home/user":                 "",
 		"fix ~/projects build":       "fix ~/projects build",
 		"email bob@example.com spec": "email bob@example.com spec",
 	} {
