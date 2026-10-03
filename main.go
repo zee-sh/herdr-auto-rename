@@ -108,6 +108,7 @@ func sweep(seq string) error {
 	for _, t := range tabs {
 		errs = append(errs, labelTab(t, agents, prev))
 	}
+	pruneState(agents, tabs)
 	return errors.Join(errs...)
 }
 

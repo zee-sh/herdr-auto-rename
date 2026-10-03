@@ -35,7 +35,15 @@ var subscriptions = []string{
 	"tab.moved",
 }
 
-var errEventsLost = errors.New("events lost")
+var (
+	errEventsLost = errors.New("events lost")
+	errInactive   = errors.New("plugin disabled, unlinked or moved")
+)
+
+// activeCheckEvery bounds how often the watcher asks herdr whether the plugin
+// is still enabled. herdr has no event for that, so the check runs lazily
+// before handling an event: an idle watcher does no work at all.
+const activeCheckEvery = 10 * time.Second
 
 func watch() error {
 	lock, err := lockWatcher()
@@ -88,6 +96,7 @@ func subscribe() error {
 		return err
 	}
 
+	var checked time.Time
 	sc := bufio.NewScanner(conn)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	started := false
@@ -115,6 +124,12 @@ func subscribe() error {
 			}
 			return fmt.Errorf("subscribe: %s: %s", msg.Error.Code, msg.Error.Message)
 		}
+		if time.Since(checked) > activeCheckEvery {
+			if !pluginActive() {
+				return errInactive
+			}
+			checked = time.Now()
+		}
 		if !started {
 			// The ack. Labels may have drifted while no one was listening.
 			started = true
@@ -133,6 +148,33 @@ func subscribe() error {
 		}
 	}
 	return sc.Err()
+}
+
+// pluginActive reports whether herdr still runs this plugin from this
+// checkout. On a failed check it assumes yes, so a busy server can't stop it.
+func pluginActive() bool {
+	out, err := herdr("plugin", "list", "--plugin", source, "--json")
+	if notFound(err) {
+		return false
+	} else if err != nil {
+		return true
+	}
+	r, err := decode[struct {
+		Plugins []struct {
+			Enabled    bool   `json:"enabled"`
+			PluginRoot string `json:"plugin_root"`
+		}
+	}](out, "plugin list")
+	if err != nil {
+		return true
+	}
+	root := os.Getenv("HERDR_PLUGIN_ROOT")
+	for _, p := range r.Plugins {
+		if p.Enabled && (root == "" || p.PluginRoot == root) {
+			return true
+		}
+	}
+	return false
 }
 
 func logErr(err error) {
@@ -217,6 +259,24 @@ func sessionDir() string {
 	dir := filepath.Join(stateDir(), "session-"+hex.EncodeToString(sum[:6]))
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
+}
+
+// pruneState deletes remembered labels for panes and tabs that no longer
+// exist, given every live agent pane and every tab.
+func pruneState(agents []*agent, tabs []*tab) {
+	keep := map[string]bool{}
+	for _, a := range agents {
+		keep[stateFile("pane-"+a.PaneID)] = true
+	}
+	for _, t := range tabs {
+		keep[stateFile("tab-"+t.TabID)] = true
+	}
+	files, _ := filepath.Glob(filepath.Join(sessionDir(), "label-*"))
+	for _, f := range files {
+		if !keep[f] {
+			_ = os.Remove(f)
+		}
+	}
 }
 
 // stateFile is where the label last set for id ("pane-<id>" or "tab-<id>")

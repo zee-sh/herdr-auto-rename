@@ -36,7 +36,8 @@ prompt like `user@host:~/dir`, a bare path) are ignored.
 
 A `[[startup]]` hook starts one watcher per herdr session. It subscribes to `pane.updated` (which
 herdr does not offer to plugin hooks; it fires on title changes) plus pane and tab lifecycle
-events, and exits with the server. A `pane.agent_status_changed` hook restarts it if it ever dies.
+events, and exits with the server, or on its next event after the plugin is disabled or
+unlinked. A `pane.agent_status_changed` hook restarts it if it ever dies.
 
 ## Requirements
 
