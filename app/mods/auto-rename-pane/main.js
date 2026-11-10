@@ -2,8 +2,9 @@
 //   { "tab": "active", "pane": { "header": { "content": { "mod": "auto-rename-pane" } } } }
 // The shipped `pane` header, except that an agent's pane shows its session name
 // (40 chars max) instead of the agent's name. The session names come from the
-// auto-rename mod (shared "auto-rename.titles"); without it in the layout, this
-// header shows the agent's name as `pane` does.
+// auto-rename mod (shared "auto-rename.titles", which it empties when taken out
+// of the layout); with no name there, this header shows the agent's name as
+// `pane` does.
 // Shows the program's icon (the app's program table), the session or agent name or
 // the terminal's title, the folder, and the agent's status; buttons split, zoom and close
 // this pane. Props from the app: { pane, terminal }. Click: focus the pane.
