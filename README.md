@@ -2,7 +2,8 @@
 
 A [herdr](https://herdr.dev) plugin that names tabs and pane borders after each coding agent's
 **session name**, exactly as the agent sets it (for Claude Code: the session title, including
-`/rename`), and does nothing else.
+`/rename`), and does nothing else. The same thing for the Herdr desktop app lives in
+[`app/`](app/) (see [Install](#install)).
 
 ```
 before:   1        2   3
@@ -41,7 +42,7 @@ unlinked. A `pane.agent_status_changed` hook restarts it if it ever dies.
 
 ## Requirements
 
-- herdr ≥ 0.9.0, Go ≥ 1.22 to build, macOS or Linux.
+- herdr ≥ 0.9.0, Go ≥ 1.22 to build, macOS or Linux. (The app side needs only the Herdr app.)
 - For pane border labels:
 
   ```toml
@@ -50,6 +51,8 @@ unlinked. A `pane.agent_status_changed` hook restarts it if it ever dies.
   ```
 
 ## Install
+
+### herdr (TUI)
 
 ```sh
 herdr plugin install zee-sh/herdr-auto-rename        # builds with go
@@ -66,6 +69,23 @@ type = "plugin_action"
 command = "zee-sh.auto-rename.refresh"
 ```
 
+### Herdr app
+
+Ask the agent in your Herdr window to *add the mod at
+github.com/zee-sh/herdr-auto-rename/tree/main/app*. It follows [`app/RECIPE.md`](app/RECIPE.md):
+copies two mods into `~/.config/herdr-app/mods/`, adds them to the layout you're using (cloning
+it first if it's one of Herdr's own), and checks them. No keys, nothing to build, no programs
+run, no network.
+
+- **`auto-rename`** draws nothing. It sits in a 0px block of the layout and renames single-agent
+  tabs on every render, with the same rules as the plugin.
+- **`auto-rename-pane`** is Herdr's `pane` header with one change: an agent's pane shows its
+  session name (40 characters max) instead of `Claude Code`.
+
+The app knows which tabs someone named and can give a tab its number back, so the app side
+needs no watcher and no position tracking. It runs only while a layout that contains it is
+shown.
+
 ## Development
 
 ```sh
@@ -73,6 +93,9 @@ make link      # build, (re)link and restart the watcher
 make restart   # after a rebuild
 go test ./...
 ```
+
+The app mods are plain files: copy `app/mods/*` into `~/.config/herdr-app/mods/` (it reloads
+them live) and run `herdr-app check` on each.
 
 Debugging:
 

@@ -1,0 +1,8 @@
+{
+  "place": "none",
+  "title": "Auto-rename pane header",
+  "cloned_from": {
+    "name": "pane",
+    "version": "0.1.13"
+  }
+}
